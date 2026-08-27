@@ -81,9 +81,7 @@ export default function App() {
   };
 
   const handleClearChat = () => {
-    if (window.confirm('Are you sure you want to clear the current study conversation?')) {
-      setMessages([]);
-    }
+    setMessages([]);
   };
 
   const handleSendMessage = async (text: string, mode: string = 'qa') => {
