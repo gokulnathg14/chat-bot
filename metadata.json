@@ -1,0 +1,6 @@
+{
+  "name": "Study Material Assistant & Email Summarizer",
+  "description": "Upload study materials, ask grounded questions with citations, and generate study session summaries and polished email drafts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
