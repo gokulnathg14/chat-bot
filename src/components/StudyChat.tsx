@@ -20,6 +20,7 @@ import {
   Layers
 } from 'lucide-react';
 import { ChatMessage, StudyMaterial, Citation } from '../types';
+import { copyToClipboard } from '../lib/safeStorage';
 
 interface StudyChatProps {
   messages: ChatMessage[];
@@ -68,8 +69,8 @@ export const StudyChat: React.FC<StudyChatProps> = ({
     }
   };
 
-  const handleCopyMessage = (id: string, text: string) => {
-    navigator.clipboard.writeText(text);
+  const handleCopyMessage = async (id: string, text: string) => {
+    await copyToClipboard(text);
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
   };

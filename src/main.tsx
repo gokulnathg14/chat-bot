@@ -1,6 +1,7 @@
 import React, { StrictMode, Component, ErrorInfo, ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App.tsx';
+import { safeStorage } from './lib/safeStorage';
 import './index.css';
 
 interface ErrorBoundaryProps {
@@ -28,8 +29,8 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
 
   handleReset = () => {
     try {
-      localStorage.removeItem('studyagent_materials');
-      localStorage.removeItem('studyagent_messages');
+      safeStorage.removeItem('studyagent_materials');
+      safeStorage.removeItem('studyagent_messages');
     } catch {
       // ignore
     }

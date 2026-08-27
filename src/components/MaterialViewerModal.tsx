@@ -1,6 +1,7 @@
 import React from 'react';
 import { X, FileText, CheckCircle, Copy, Check, Trash2, Calendar, BookOpen } from 'lucide-react';
 import { StudyMaterial } from '../types';
+import { copyToClipboard } from '../lib/safeStorage';
 
 interface MaterialViewerModalProps {
   material: StudyMaterial | null;
@@ -19,8 +20,8 @@ export const MaterialViewerModal: React.FC<MaterialViewerModalProps> = ({
 
   if (!material) return null;
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(material.content);
+  const handleCopy = async () => {
+    await copyToClipboard(material.content);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };

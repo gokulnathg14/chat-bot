@@ -22,6 +22,7 @@ import {
   MessageSquareQuote
 } from 'lucide-react';
 import { ChatMessage, StudyMaterial, EmailDraft, EmailAudience, EmailTone } from '../types';
+import { copyToClipboard } from '../lib/safeStorage';
 
 interface EmailAgentModalProps {
   isOpen: boolean;
@@ -142,9 +143,9 @@ export const EmailAgentModal: React.FC<EmailAgentModalProps> = ({
     }
   };
 
-  const handleCopy = () => {
+  const handleCopy = async () => {
     const fullText = `Subject: ${editableSubject}\nTo: ${recipientEmail || draft?.recipient || ''}\n\n${editableBody}`;
-    navigator.clipboard.writeText(fullText);
+    await copyToClipboard(fullText);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -153,7 +154,17 @@ export const EmailAgentModal: React.FC<EmailAgentModalProps> = ({
     const to = encodeURIComponent(recipientEmail || draft?.recipient || '');
     const sub = encodeURIComponent(editableSubject);
     const body = encodeURIComponent(editableBody);
-    window.open(`mailto:${to}?subject=${sub}&body=${body}`, '_blank');
+    const mailtoUrl = `mailto:${to}?subject=${sub}&body=${body}`;
+    try {
+      window.location.href = mailtoUrl;
+    } catch {
+      // Fallback anchor click
+      const a = document.createElement('a');
+      a.href = mailtoUrl;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.click();
+    }
   };
 
   const handleDownload = () => {

@@ -7,13 +7,14 @@ import { EmailAgentModal } from './components/EmailAgentModal';
 import { StudyToolsModal } from './components/StudyToolsModal';
 import { StudyMaterial, ChatMessage } from './types';
 import { SAMPLE_STUDY_MATERIALS } from './data/sampleMaterials';
+import { safeStorage } from './lib/safeStorage';
 import { BookOpen, MessageSquare, Plus, Sparkles, Mail } from 'lucide-react';
 
 export default function App() {
   // Initialize with rich sample study materials
   const [materials, setMaterials] = useState<StudyMaterial[]>(() => {
     try {
-      const saved = localStorage.getItem('studyagent_materials');
+      const saved = safeStorage.getItem('studyagent_materials');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
@@ -26,7 +27,7 @@ export default function App() {
 
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
     try {
-      const saved = localStorage.getItem('studyagent_messages');
+      const saved = safeStorage.getItem('studyagent_messages');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) return parsed;
@@ -46,7 +47,7 @@ export default function App() {
   // Persistence to local storage
   useEffect(() => {
     try {
-      localStorage.setItem('studyagent_materials', JSON.stringify(materials));
+      safeStorage.setItem('studyagent_materials', JSON.stringify(materials));
     } catch {
       // ignore
     }
@@ -54,7 +55,7 @@ export default function App() {
 
   useEffect(() => {
     try {
-      localStorage.setItem('studyagent_messages', JSON.stringify(messages));
+      safeStorage.setItem('studyagent_messages', JSON.stringify(messages));
     } catch {
       // ignore
     }
