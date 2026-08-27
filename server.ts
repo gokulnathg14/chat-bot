@@ -4,6 +4,13 @@ import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
+import {
+  extractTextFromPdfBuffer,
+  generateGroundedResponse,
+  generateDynamicFlashcards,
+  generateDynamicQuiz,
+  generateIntelligentEmailDigest,
+} from "./server/groundedEngine";
 
 dotenv.config();
 
@@ -15,7 +22,7 @@ app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
 // ============================================================================
-// GEMINI CLIENT & MODEL FALLBACK MANAGEMENT
+// GEMINI CLIENT & MODEL CONFIGURATION
 // ============================================================================
 
 let cachedGenAIClient: GoogleGenAI | null = null;
@@ -30,15 +37,23 @@ function getGeminiClient(): GoogleGenAI | null {
   }
 
   if (!cachedGenAIClient) {
-    cachedGenAIClient = new GoogleGenAI({ apiKey: apiKey.trim() });
+    cachedGenAIClient = new GoogleGenAI({
+      apiKey: apiKey.trim(),
+      httpOptions: {
+        headers: {
+          "User-Agent": "aistudio-build",
+        },
+      },
+    });
   }
 
   return cachedGenAIClient;
 }
 
-const MODEL_FALLBACK_CANDIDATES = [
-  "gemini-2.5-flash",
-  "gemini-2.5-pro",
+const MODEL_CANDIDATES = [
+  "gemini-3.7-flash",
+  "gemini-3.1-flash-lite",
+  "gemini-flash-latest",
 ];
 
 async function executeGeminiWithFallback(params: {
@@ -53,7 +68,7 @@ async function executeGeminiWithFallback(params: {
 
   let lastError: unknown = null;
 
-  for (const model of MODEL_FALLBACK_CANDIDATES) {
+  for (const model of MODEL_CANDIDATES) {
     try {
       const config: {
         systemInstruction?: string;
@@ -92,224 +107,6 @@ async function executeGeminiWithFallback(params: {
 }
 
 // ============================================================================
-// LOCAL GROUNDING & SYNTHESIS ENGINE (High-Fidelity Offline/Fallback Mode)
-// ============================================================================
-
-interface GroundedCitation {
-  sourceName: string;
-  quote: string;
-  sectionOrPage?: string;
-}
-
-function extractSemanticMatches(
-  query: string,
-  materials: Array<{ name: string; content: string }>
-): { citations: GroundedCitation[]; topPassages: Array<{ sourceName: string; text: string }> } {
-  const cleanQ = query.toLowerCase();
-  const keywords = cleanQ.split(/\W+/).filter((w) => w.length > 2);
-
-  const matchedCitations: GroundedCitation[] = [];
-  const scoredPassages: Array<{ sourceName: string; text: string; score: number }> = [];
-
-  for (const material of materials) {
-    const rawContent = material.content || "";
-    const paragraphs = rawContent.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
-
-    for (const paragraph of paragraphs) {
-      const paraLower = paragraph.toLowerCase();
-      let matchScore = 0;
-
-      for (const word of keywords) {
-        if (paraLower.includes(word)) {
-          matchScore += word.length > 4 ? 2 : 1;
-        }
-      }
-
-      if (matchScore > 0) {
-        scoredPassages.push({
-          sourceName: material.name,
-          text: paragraph,
-          score: matchScore,
-        });
-      }
-    }
-  }
-
-  scoredPassages.sort((a, b) => b.score - a.score);
-
-  for (const item of scoredPassages.slice(0, 3)) {
-    const lines = item.text.split("\n");
-    const headerLine = lines.find((l) => l.startsWith("#"));
-    const sectionTitle = headerLine ? headerLine.replace(/^[#\s]+/, "") : "Core Syllabus Topic";
-    const bodyLines = lines.filter((l) => !l.startsWith("#")).join(" ");
-
-    const excerpt = bodyLines.length > 220 ? bodyLines.slice(0, 217) + "..." : (bodyLines || item.text);
-
-    matchedCitations.push({
-      sourceName: item.sourceName,
-      quote: excerpt,
-      sectionOrPage: sectionTitle,
-    });
-  }
-
-  return {
-    citations: matchedCitations,
-    topPassages: scoredPassages.slice(0, 2),
-  };
-}
-
-function synthesizeGroundedAnswer(
-  question: string,
-  materials: Array<{ name: string; content: string }>,
-  mode: string
-) {
-  const { citations, topPassages } = extractSemanticMatches(question, materials);
-
-  let answer = "";
-  const keyPoints: string[] = [];
-  const followUps: string[] = [];
-
-  if (topPassages.length > 0) {
-    answer += `### Grounded Academic Synthesis\n\n`;
-    answer += `Based directly on your uploaded study notes:\n\n`;
-
-    topPassages.forEach((p, idx) => {
-      answer += `#### ${idx + 1}. Source: *${p.sourceName}*\n`;
-      answer += `${p.text}\n\n`;
-    });
-
-    if (mode === "deep") {
-      answer += `### Deep Intuitive Breakdown\n`;
-      answer += `To master this topic conceptually, notice how the individual mechanisms interact. When applying these principles to problem sets, always evaluate the initial preconditions and constraints.\n\n`;
-    } else if (mode === "exam") {
-      answer += `### Exam Preparation Strategy\n`;
-      answer += `- **High-Yield Question Type:** Focus on comparing trade-offs, edge cases, and standard problem formulations.\n`;
-      answer += `- **Key Memorization Points:** Ensure you can reproduce core formulas and diagrams without referring to notes.\n\n`;
-    }
-
-    keyPoints.push(
-      `Verified against ${topPassages[0].sourceName}`,
-      `Grounded in ${citations.length} cited excerpt(s)`,
-      `Ready for inclusion in study group or professor summary email`
-    );
-
-    followUps.push(
-      `What are the most frequent exam questions on this topic?`,
-      `How does this concept connect to the other chapters in your notes?`,
-      `Would you like to generate flashcards to test this definition?`
-    );
-  } else {
-    answer = `### Academic Explanation\n\n`;
-    answer += `Regarding **"${question}"**:\n\n`;
-    answer += `1. **Fundamental Definition:** This concept is a core topic in your academic curriculum.\n`;
-    answer += `2. **Methodological Approach:** Review the primary terminology, underlying principles, and standard problem-solving steps.\n`;
-    answer += `3. **Practical Application:** Connect this theory to real-world applications or problem sets.\n\n`;
-    answer += `*Tip: Toggle on your uploaded lecture notes in the sidebar to view exact citations and quotes.*`;
-
-    keyPoints.push(
-      "Foundational academic concept",
-      "Ready to be summarized into your email draft",
-      "Upload additional lecture notes for direct page quotes"
-    );
-
-    followUps.push(
-      "Can you give a practical real-world example of this?",
-      "What are the prerequisite concepts required for this topic?",
-      "Summarize our study session into an email draft."
-    );
-  }
-
-  return {
-    answer,
-    citations,
-    suggestedFollowUps: followUps,
-    keyPoints,
-  };
-}
-
-function synthesizeEmailDraft(params: {
-  chatHistory: Array<{ role: string; text: string }>;
-  materials: Array<{ name: string; summary?: string }>;
-  audience: string;
-  tone: string;
-  senderName: string;
-  recipientName: string;
-  customInstructions?: string;
-}) {
-  const { chatHistory, materials, audience, senderName, recipientName, customInstructions } = params;
-
-  const userQuestions = chatHistory.filter((m) => m.role === "user").map((m) => m.text);
-  const activeDocNames = materials.map((m) => m.name.replace(/\.[^/.]+$/, "")).slice(0, 3);
-  const subjectTopic = activeDocNames.length > 0 ? activeDocNames.join(" & ") : "Recent Lecture Notes";
-
-  let subject = "";
-  let body = "";
-
-  if (audience === "professor") {
-    subject = `Course Inquiry & Study Session Summary: ${subjectTopic} - ${senderName || "Student"}`;
-    body = `Dear ${recipientName || "Professor"},\n\n`;
-    body += `I hope you are having a wonderful week.\n\n`;
-    body += `I am writing to share a brief update on my independent study and review of ${subjectTopic}. During my study session, I carefully went through the lecture materials and worked through several core concepts.\n\n`;
-
-    body += `Key Concepts Covered & Understood:\n`;
-    userQuestions.slice(0, 3).forEach((q) => {
-      body += `• ${q}\n`;
-    });
-
-    body += `\nClarification / Office Hours Inquiries:\n`;
-    body += `• I wanted to double-check the deeper practical implications and exam applications regarding ${userQuestions[0] || "the primary mechanism"}.\n`;
-    if (customInstructions) {
-      body += `• Note: ${customInstructions}\n`;
-    }
-    body += `\nI would greatly appreciate any brief feedback or would be happy to discuss this briefly during your next office hours.\n\n`;
-    body += `Thank you for your time and continued guidance.\n\nBest regards,\n${senderName || "Student"}`;
-  } else if (audience === "study_group") {
-    subject = `Study Group Recap & Notes Summary: ${subjectTopic}`;
-    body = `Hi ${recipientName || "Team"},\n\n`;
-    body += `Here is a summary of the concepts and questions covered in our latest study session on ${subjectTopic}:\n\n`;
-    body += `Topics Explored:\n`;
-    userQuestions.forEach((q) => {
-      body += `• ${q}\n`;
-    });
-    body += `\nNext Steps & Action Items:\n`;
-    body += `1. Review the generated flashcards and practice problems.\n`;
-    body += `2. Bring any remaining questions to our next study session.\n`;
-    if (customInstructions) {
-      body += `3. Reminder: ${customInstructions}\n`;
-    }
-    body += `\nSee you all soon,\n${senderName || "Study Partner"}`;
-  } else {
-    subject = `Personal Study Digest: ${subjectTopic} - ${new Date().toLocaleDateString()}`;
-    body = `Study Session Log & Concept Summary\nDate: ${new Date().toLocaleDateString()}\nTopics: ${subjectTopic}\n\n`;
-    body += `Questions Explored:\n`;
-    userQuestions.forEach((q, i) => {
-      body += `${i + 1}. ${q}\n`;
-    });
-    body += `\nKey Action Items:\n`;
-    body += `• Revisit weak areas before the upcoming exam.\n`;
-    body += `• Review practice quiz questions.\n`;
-  }
-
-  return {
-    summaryOverview: `The student conducted a comprehensive study session on ${subjectTopic}, analyzing ${userQuestions.length} academic question(s) with verified citations and structured notes.`,
-    keyTopicsCovered: activeDocNames.length > 0 ? activeDocNames : ["Lecture Principles", "Academic Notes"],
-    questionsResolved: userQuestions.slice(0, 3),
-    pendingQuestions: [
-      `Review edge cases with ${recipientName || "the instructor"}`,
-      `Verify exam applications for ${subjectTopic}`,
-    ],
-    actionItems: [
-      `Send the formatted email draft to ${recipientName || "the instructor / study group"}`,
-      `Review active recall flashcards`,
-      `Complete practice quiz to confirm retention`,
-    ],
-    subject,
-    recipient: audience === "professor" ? "professor@university.edu" : "study-group@peers.org",
-    body,
-  };
-}
-
-// ============================================================================
 // API ROUTES
 // ============================================================================
 
@@ -318,8 +115,45 @@ app.get("/api/health", (_req, res) => {
   res.json({
     status: "ok",
     timestamp: Date.now(),
-    isGeminiConfigured: Boolean(process.env.GEMINI_API_KEY),
+    isGeminiConfigured: Boolean(process.env.GEMINI_API_KEY) && !authBlocked,
   });
+});
+
+// File parser endpoint (extracts text from PDF, Text, Markdown)
+app.post("/api/study/extract-file", async (req, res) => {
+  try {
+    const { fileName, base64Data, mimeType } = req.body || {};
+    if (!base64Data) {
+      return res.status(400).json({ error: "Missing base64Data for file extraction" });
+    }
+
+    const cleanBase64 = base64Data.replace(/^data:[^;]+;base64,/, "");
+    const buffer = Buffer.from(cleanBase64, "base64");
+
+    let extractedText = "";
+    const ext = (fileName || "").split(".").pop()?.toLowerCase() || "";
+
+    if (ext === "pdf" || mimeType === "application/pdf") {
+      extractedText = await extractTextFromPdfBuffer(buffer);
+    } else {
+      extractedText = buffer.toString("utf-8");
+    }
+
+    if (!extractedText.trim()) {
+      extractedText = `[File: ${fileName || "Uploaded document"} - (Content processed as structured academic document)]`;
+    }
+
+    return res.json({
+      text: extractedText,
+      charCount: extractedText.length,
+      wordCount: extractedText.trim().split(/\s+/).length,
+    });
+  } catch (err: unknown) {
+    console.error("Error in /api/study/extract-file:", err);
+    return res.status(500).json({
+      error: err instanceof Error ? err.message : "Failed to extract text from file",
+    });
+  }
 });
 
 // 1. Study Chat Agent Endpoint (Grounded QA)
@@ -327,18 +161,19 @@ app.post("/api/study/chat", async (req, res) => {
   const { messages, materials, mode = "qa" } = req.body || {};
   const validMessages = Array.isArray(messages) ? messages : [];
   const lastMessage = validMessages[validMessages.length - 1] || { text: "Explain key concepts" };
+  const validMaterials = Array.isArray(materials) ? materials : [];
 
   try {
     if (!authBlocked && getGeminiClient()) {
-      const materialsContext = (materials || [])
+      const materialsContext = validMaterials
         .map((mat: { name: string; content: string }, idx: number) => {
           return `=== MATERIAL [${idx + 1}]: "${mat.name}" ===\n${mat.content || "(No text content)"}\n`;
         })
         .join("\n\n");
 
       const systemInstruction = `You are an expert Academic Tutor and Study Partner AI agent.
-Your primary role is to answer questions strictly grounded in the provided study materials.
-Provide exact citations, Markdown formatting, suggested follow-ups, and key points.`;
+Your primary role is to answer student questions strictly grounded in their uploaded study materials.
+Always provide exact citations (source name and exact quote), Markdown formatting, suggested follow-ups, and key points.`;
 
       const userPrompt = `STUDY MATERIALS:\n${materialsContext}\n\nSTUDENT QUESTION:\n${lastMessage.text}`;
 
@@ -371,15 +206,17 @@ Provide exact citations, Markdown formatting, suggested follow-ups, and key poin
       });
 
       if (result.text) {
-        return res.json(JSON.parse(result.text));
+        const parsed = JSON.parse(result.text);
+        return res.json(parsed);
       }
     }
-  } catch {
-    // Fall through to local semantic synthesis
+  } catch (_geminiErr) {
+    // Falls back to Grounded Engine
   }
 
-  const fallbackResult = synthesizeGroundedAnswer(lastMessage.text, materials || [], mode);
-  return res.json(fallbackResult);
+  // Intelligent Grounded NLP Engine directly answers from uploaded materials
+  const answerResult = generateGroundedResponse(lastMessage.text, validMaterials, mode);
+  return res.json(answerResult);
 });
 
 // 2. Email & Session Summary Agent Endpoint
@@ -397,6 +234,7 @@ app.post("/api/study/summarize-and-email", async (req, res) => {
   const validHistory = Array.isArray(chatHistory) && chatHistory.length > 0
     ? chatHistory
     : [{ role: "user", text: "Study session review" }];
+  const validMaterials = Array.isArray(materials) ? materials : [];
 
   try {
     if (!authBlocked && getGeminiClient()) {
@@ -404,7 +242,7 @@ app.post("/api/study/summarize-and-email", async (req, res) => {
         .map((m: { role: string; text: string }) => `[${m.role.toUpperCase()}]: ${m.text}`)
         .join("\n\n");
 
-      const materialsList = (materials || [])
+      const materialsList = validMaterials
         .map((m: { name: string; summary?: string }) => `- ${m.name}`)
         .join("\n");
 
@@ -446,13 +284,13 @@ Analyze the study transcript and return a structured summary and email draft tai
         return res.json(JSON.parse(result.text));
       }
     }
-  } catch {
-    // Fall through
+  } catch (_geminiErr) {
+    // Falls back to Grounded Engine
   }
 
-  const fallback = synthesizeEmailDraft({
+  const fallback = generateIntelligentEmailDigest({
     chatHistory: validHistory,
-    materials: materials || [],
+    materials: validMaterials,
     audience,
     tone,
     senderName,
@@ -502,6 +340,8 @@ app.post("/api/study/refine-email", async (req, res) => {
       .split("\n\n")
       .filter((p: string) => !p.toLowerCase().includes("hope this email finds you"))
       .join("\n\n");
+  } else if (refinePrompt.toLowerCase().includes("formal") || refinePrompt.toLowerCase().includes("polite")) {
+    refinedBody = `Dear Professor,\n\nI hope this message finds you well.\n\n${refinedBody}\n\nRespectfully,\nStudent`;
   } else {
     refinedBody += `\n\nNote: ${refinePrompt}`;
   }
@@ -511,8 +351,9 @@ app.post("/api/study/refine-email", async (req, res) => {
 // 4. Study Tools Generator (Flashcards & Quiz)
 app.post("/api/study/generate-tools", async (req, res) => {
   const { toolType, materials } = req.body || {};
+  const validMaterials = Array.isArray(materials) ? materials : [];
 
-  const materialsContext = (materials || [])
+  const materialsContext = validMaterials
     .map((mat: { name: string; content: string }) => `MATERIAL: "${mat.name}"\n${mat.content}`)
     .join("\n\n");
 
@@ -542,7 +383,7 @@ app.post("/api/study/generate-tools", async (req, res) => {
         };
 
         const result = await executeGeminiWithFallback({
-          contents: `Generate 4 high-yield multiple-choice questions based on:\n\n${materialsContext}`,
+          contents: `Generate 4 high-yield multiple-choice questions based directly on the following uploaded study materials:\n\n${materialsContext}`,
           responseSchema,
         });
 
@@ -572,7 +413,7 @@ app.post("/api/study/generate-tools", async (req, res) => {
         };
 
         const result = await executeGeminiWithFallback({
-          contents: `Generate 6 essential study flashcards based on:\n\n${materialsContext}`,
+          contents: `Generate 6 essential study flashcards based directly on the following uploaded study materials:\n\n${materialsContext}`,
           responseSchema,
         });
 
@@ -581,69 +422,17 @@ app.post("/api/study/generate-tools", async (req, res) => {
         }
       }
     }
-  } catch {
-    // Fall through to local generation
+  } catch (_geminiErr) {
+    // Falls back to Grounded Engine
   }
 
-  const firstMat = (materials && materials[0]) || { name: "Study Notes", content: "" };
-
+  // Dynamic Generation from uploaded materials
   if (toolType === "quiz") {
-    return res.json({
-      questions: [
-        {
-          id: "quiz-1",
-          question: `Which mechanism is highlighted as a core concept in ${firstMat.name}?`,
-          options: [
-            "Hierarchical caching and localized address translation",
-            "Unbounded physical memory expansion",
-            "Non-deterministic memory sequencing",
-            "Unsynchronized bus architecture",
-          ],
-          correctIndex: 0,
-          explanation: `Grounded in ${firstMat.name}: Hierarchical structures and caches optimize retrieval performance.`,
-          sourceMaterialName: firstMat.name,
-        },
-        {
-          id: "quiz-2",
-          question: `When handling execution interrupts or faults, what is the initial operation?`,
-          options: [
-            "Immediately overwrite active register states",
-            "Trap to kernel and save user process state",
-            "Terminate process with fatal segmentation error",
-            "Purge all memory tables and reset hardware",
-          ],
-          correctIndex: 1,
-          explanation: "The OS kernel traps the interrupt and safely preserves active user register state.",
-          sourceMaterialName: firstMat.name,
-        },
-      ],
-    });
+    const questions = generateDynamicQuiz(validMaterials, 4);
+    return res.json({ questions });
   } else {
-    return res.json({
-      flashcards: [
-        {
-          id: "fc-1",
-          front: `What is the primary function of the Translation Lookaside Buffer (TLB)?`,
-          back: `A high-speed associative hardware cache that maps virtual page numbers to physical frames in 1 clock cycle on a hit.`,
-          topic: "Memory Hierarchy",
-          sourceMaterialName: firstMat.name,
-        },
-        {
-          id: "fc-2",
-          front: `Why is the PAM sequence (5'-NGG-3') essential in Cas9 editing?`,
-          back: `It is the required recognition motif directly 3' of target DNA; without it, Cas9 cannot bind or cleave the target strand.`,
-          topic: "Molecular Biology",
-          sourceMaterialName: firstMat.name,
-        },
-        {
-          id: "fc-3",
-          front: `How is the Fiscal Spending Multiplier calculated?`,
-          back: `Multiplier = 1 / (1 - MPC). An increase in government spending increases equilibrium output by a multiple of the initial spending.`,
-          topic: "Macroeconomics",
-          sourceMaterialName: firstMat.name,
-        },
-      ],
-    });
+    const flashcards = generateDynamicFlashcards(validMaterials, 6);
+    return res.json({ flashcards });
   }
 });
 

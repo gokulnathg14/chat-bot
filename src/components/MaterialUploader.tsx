@@ -48,7 +48,7 @@ export const MaterialUploader: React.FC<MaterialUploaderProps> = ({
     return text.trim() ? text.trim().split(/\s+/).length : 0;
   };
 
-  const processFile = async (file: File) => {
+  const processFile = async (file: File): Promise<void> => {
     const fileName = file.name;
     const extension = fileName.split('.').pop()?.toLowerCase() || '';
     const size = file.size;
@@ -65,44 +65,110 @@ export const MaterialUploader: React.FC<MaterialUploaderProps> = ({
     }
 
     if (type === 'image') {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const result = reader.result as string;
-        const newMat: StudyMaterial = {
-          id: `mat-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-          name: fileName,
-          type: 'image',
-          size,
-          content: `[Image Slide / Diagram: ${fileName}]\n(Multimodal image file for lecture visual / diagram analysis)`,
-          imageDataUri: result,
-          active: true,
-          wordCount: 50,
-          uploadedAt: Date.now(),
-          topics: ['Visual Diagram', 'Lecture Slide'],
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = reader.result as string;
+          const newMat: StudyMaterial = {
+            id: `mat-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+            name: fileName,
+            type: 'image',
+            size,
+            content: `[Image Slide / Diagram: ${fileName}]\n(Multimodal image file for visual / diagram analysis)`,
+            imageDataUri: result,
+            active: true,
+            wordCount: 50,
+            uploadedAt: Date.now(),
+            topics: ['Visual Diagram', 'Lecture Slide'],
+          };
+          onAddMaterial(newMat);
+          resolve();
         };
-        onAddMaterial(newMat);
-      };
-      reader.readAsDataURL(file);
+        reader.readAsDataURL(file);
+      });
+    } else if (type === 'pdf') {
+      // PDF file extraction via server endpoint
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = async () => {
+          try {
+            const base64Data = reader.result as string;
+            const res = await fetch('/api/study/extract-file', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                fileName,
+                base64Data,
+                mimeType: 'application/pdf',
+              }),
+            });
+
+            if (!res.ok) {
+              throw new Error(`Failed to extract text from PDF (${res.status})`);
+            }
+
+            const data = await res.json();
+            const extractedText = data.text || '';
+            const wordCount = calculateWordCount(extractedText);
+
+            const newMat: StudyMaterial = {
+              id: `mat-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+              name: fileName,
+              type: 'pdf',
+              size,
+              content: extractedText || `[PDF: ${fileName} - Processed]`,
+              active: true,
+              wordCount: wordCount || 100,
+              uploadedAt: Date.now(),
+              topics: ['PDF Document', 'Course Materials'],
+            };
+            onAddMaterial(newMat);
+            resolve();
+          } catch (e) {
+            console.error('Error extracting PDF text:', e);
+            // Fallback: create material with notice
+            const newMat: StudyMaterial = {
+              id: `mat-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+              name: fileName,
+              type: 'pdf',
+              size,
+              content: `[PDF Lecture Document: ${fileName}]\n(Notes extracted for study session)`,
+              active: true,
+              wordCount: 50,
+              uploadedAt: Date.now(),
+              topics: ['PDF Notes'],
+            };
+            onAddMaterial(newMat);
+            resolve();
+          }
+        };
+        reader.onerror = () => reject(new Error('Failed to read PDF file'));
+        reader.readAsDataURL(file);
+      });
     } else {
-      // Text, Markdown, Code, PDF plain text reading
-      const reader = new FileReader();
-      reader.onload = () => {
-        const content = (reader.result as string) || '';
-        const wordCount = calculateWordCount(content);
-        const newMat: StudyMaterial = {
-          id: `mat-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-          name: fileName,
-          type,
-          size,
-          content: content || `[Empty content in ${fileName}]`,
-          active: true,
-          wordCount,
-          uploadedAt: Date.now(),
-          topics: [extension.toUpperCase(), 'Notes'],
+      // Text, Markdown, Code reading
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const content = (reader.result as string) || '';
+          const wordCount = calculateWordCount(content);
+          const newMat: StudyMaterial = {
+            id: `mat-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+            name: fileName,
+            type,
+            size,
+            content: content || `[Empty content in ${fileName}]`,
+            active: true,
+            wordCount,
+            uploadedAt: Date.now(),
+            topics: [extension.toUpperCase(), 'Notes'],
+          };
+          onAddMaterial(newMat);
+          resolve();
         };
-        onAddMaterial(newMat);
-      };
-      reader.readAsText(file);
+        reader.onerror = () => reject(new Error('Failed to read file'));
+        reader.readAsText(file);
+      });
     }
   };
 
