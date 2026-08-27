@@ -8,7 +8,7 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
 // Increase payload limit for file/image uploads
 app.use(express.json({ limit: "50mb" }));
@@ -659,17 +659,6 @@ async function startServer() {
       appType: "spa",
     });
     app.use(vite.middlewares);
-    app.get("*", async (req, res, next) => {
-      if (req.originalUrl.startsWith("/api/")) return next();
-      try {
-        const indexPath = path.resolve(process.cwd(), "index.html");
-        let html = fs.readFileSync(indexPath, "utf-8");
-        html = await vite.transformIndexHtml(req.originalUrl, html);
-        res.status(200).set({ "Content-Type": "text/html" }).end(html);
-      } catch (e) {
-        next(e);
-      }
-    });
   } else {
     const candidates = [
       path.join(process.cwd(), "dist"),
@@ -679,10 +668,7 @@ async function startServer() {
     const distPath = candidates.find(p => fs.existsSync(path.join(p, "index.html"))) || path.join(process.cwd(), "dist");
     
     app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      if (req.originalUrl.startsWith("/api/")) {
-        return res.status(404).json({ error: "API endpoint not found" });
-      }
+    app.get("*", (_req, res) => {
       const indexPath = path.join(distPath, "index.html");
       if (fs.existsSync(indexPath)) {
         res.sendFile(indexPath);
