@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { ChatMessage, StudyMaterial, Citation } from '../types';
 import { copyToClipboard } from '../lib/safeStorage';
+import { PanelLeft, PanelLeftClose } from 'lucide-react';
 
 interface StudyChatProps {
   messages: ChatMessage[];
@@ -30,6 +31,8 @@ interface StudyChatProps {
   onClearChat: () => void;
   onOpenEmailAgent: () => void;
   onOpenStudyTools: (tool: 'flashcards' | 'quiz') => void;
+  isSidebarOpen?: boolean;
+  onToggleSidebar?: () => void;
 }
 
 export const StudyChat: React.FC<StudyChatProps> = ({
@@ -40,6 +43,8 @@ export const StudyChat: React.FC<StudyChatProps> = ({
   onClearChat,
   onOpenEmailAgent,
   onOpenStudyTools,
+  isSidebarOpen = true,
+  onToggleSidebar,
 }) => {
   const [input, setInput] = useState('');
   const [selectedMode, setSelectedMode] = useState<'qa' | 'deep' | 'exam' | 'formulas'>('qa');
@@ -112,42 +117,57 @@ export const StudyChat: React.FC<StudyChatProps> = ({
   return (
     <div className="flex flex-col h-full bg-slate-950 text-slate-100 relative">
       {/* Top Banner / Mode Bar */}
-      <div className="px-4 py-2.5 bg-slate-900/80 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2">
-        {/* Mode Selector */}
-        <div className="flex items-center gap-1 bg-slate-950/60 p-1 rounded-xl border border-slate-800 text-xs">
-          <button
-            onClick={() => setSelectedMode('qa')}
-            className={`px-2.5 py-1 rounded-lg font-medium transition flex items-center gap-1.5 ${
-              selectedMode === 'qa'
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Bot className="w-3.5 h-3.5" />
-            <span>Grounded Q&amp;A</span>
-          </button>
-          <button
-            onClick={() => setSelectedMode('deep')}
-            className={`px-2.5 py-1 rounded-lg font-medium transition flex items-center gap-1.5 ${
-              selectedMode === 'deep'
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <BrainCircuit className="w-3.5 h-3.5" />
-            <span>Deep Intuition</span>
-          </button>
-          <button
-            onClick={() => setSelectedMode('exam')}
-            className={`px-2.5 py-1 rounded-lg font-medium transition flex items-center gap-1.5 ${
-              selectedMode === 'exam'
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <GraduationCap className="w-3.5 h-3.5" />
-            <span>Exam Prep</span>
-          </button>
+      <div className="px-3 sm:px-4 py-2.5 bg-slate-900/80 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2 shrink-0">
+        <div className="flex items-center gap-2">
+          {onToggleSidebar && !isSidebarOpen && (
+            <button
+              onClick={onToggleSidebar}
+              className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 text-xs font-medium transition"
+              title="Show Study Materials and Notes panel"
+            >
+              <PanelLeft className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Notes ({materials.length})</span>
+            </button>
+          )}
+
+          {/* Mode Selector */}
+          <div className="flex items-center gap-1 bg-slate-950/60 p-1 rounded-xl border border-slate-800 text-xs">
+            <button
+              onClick={() => setSelectedMode('qa')}
+              className={`px-2.5 py-1 rounded-lg font-medium transition flex items-center gap-1.5 ${
+                selectedMode === 'qa'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Bot className="w-3.5 h-3.5" />
+              <span>Grounded Q&amp;A</span>
+            </button>
+            <button
+              onClick={() => setSelectedMode('deep')}
+              className={`px-2.5 py-1 rounded-lg font-medium transition flex items-center gap-1.5 ${
+                selectedMode === 'deep'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <BrainCircuit className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Deep Intuition</span>
+              <span className="sm:hidden">Deep</span>
+            </button>
+            <button
+              onClick={() => setSelectedMode('exam')}
+              className={`px-2.5 py-1 rounded-lg font-medium transition flex items-center gap-1.5 ${
+                selectedMode === 'exam'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <GraduationCap className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Exam Prep</span>
+              <span className="sm:hidden">Exam</span>
+            </button>
+          </div>
         </div>
 
         {/* Chat Actions */}
