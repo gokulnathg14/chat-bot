@@ -13,40 +13,53 @@ const PORT = 3000;
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
-// Safe Gemini Client Initialization
-let cachedAiClient: GoogleGenAI | null = null;
-let apiDisabledDueToAuth = false;
+// ============================================================================
+// GEMINI CLIENT & MODEL FALLBACK MANAGEMENT
+// ============================================================================
+
+let cachedGenAIClient: GoogleGenAI | null = null;
+let authBlocked = false;
 
 function getGeminiClient(): GoogleGenAI | null {
-  if (apiDisabledDueToAuth) return null;
+  if (authBlocked) return null;
+
   const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey || apiKey === "MY_GEMINI_API_KEY") {
+  if (!apiKey || apiKey.trim() === "" || apiKey === "MY_GEMINI_API_KEY") {
     return null;
   }
-  if (!cachedAiClient) {
-    cachedAiClient = new GoogleGenAI({ apiKey });
+
+  if (!cachedGenAIClient) {
+    cachedGenAIClient = new GoogleGenAI({ apiKey: apiKey.trim() });
   }
-  return cachedAiClient;
+
+  return cachedGenAIClient;
 }
 
-// Recommended Models
-const MODEL_CANDIDATES = ["gemini-2.5-flash", "gemini-2.5-pro"];
+const MODEL_FALLBACK_CANDIDATES = [
+  "gemini-2.5-flash",
+  "gemini-2.5-pro",
+];
 
-async function generateWithModelFallback(params: {
+async function executeGeminiWithFallback(params: {
   contents: string;
   systemInstruction?: string;
   responseSchema?: any;
-}) {
-  const ai = getGeminiClient();
-  if (!ai) {
-    throw new Error("GEMINI_API_KEY_UNAVAILABLE");
+}): Promise<{ text: string; modelUsed: string }> {
+  const client = getGeminiClient();
+  if (!client) {
+    throw new Error("GEMINI_CLIENT_UNAVAILABLE: API key is not configured.");
   }
 
-  let lastError: any = null;
+  let lastError: unknown = null;
 
-  for (const model of MODEL_CANDIDATES) {
+  for (const model of MODEL_FALLBACK_CANDIDATES) {
     try {
-      const config: any = {};
+      const config: {
+        systemInstruction?: string;
+        responseMimeType?: string;
+        responseSchema?: any;
+      } = {};
+
       if (params.systemInstruction) {
         config.systemInstruction = params.systemInstruction;
       }
@@ -55,70 +68,78 @@ async function generateWithModelFallback(params: {
         config.responseSchema = params.responseSchema;
       }
 
-      const response = await ai.models.generateContent({
+      const response = await client.models.generateContent({
         model,
         contents: params.contents,
         config,
       });
 
-      return { text: response.text, modelUsed: model };
-    } catch (err: any) {
+      if (response && response.text) {
+        return { text: response.text, modelUsed: model };
+      }
+    } catch (err: unknown) {
       lastError = err;
-      const errMsg = String(err?.message || err);
-      if (errMsg.includes("403") || errMsg.includes("PERMISSION_DENIED")) {
-        apiDisabledDueToAuth = true;
+      const errorMsg = String(err instanceof Error ? err.message : err);
+      if (errorMsg.includes("403") || errorMsg.includes("PERMISSION_DENIED")) {
+        authBlocked = true;
         break;
       }
     }
   }
 
-  throw lastError || new Error("Gemini generation unavailable");
+  throw lastError || new Error("All candidate Gemini models failed.");
 }
 
-// Highly capable local semantic/grounded retrieval engine
-function performSemanticGrounding(
-  question: string,
+// ============================================================================
+// LOCAL GROUNDING & SYNTHESIS ENGINE (High-Fidelity Offline/Fallback Mode)
+// ============================================================================
+
+interface GroundedCitation {
+  sourceName: string;
+  quote: string;
+  sectionOrPage?: string;
+}
+
+function extractSemanticMatches(
+  query: string,
   materials: Array<{ name: string; content: string }>
-) {
-  const cleanQ = question.toLowerCase();
-  const qWords = cleanQ.split(/\W+/).filter((w) => w.length > 2);
+): { citations: GroundedCitation[]; topPassages: Array<{ sourceName: string; text: string }> } {
+  const cleanQ = query.toLowerCase();
+  const keywords = cleanQ.split(/\W+/).filter((w) => w.length > 2);
 
-  const matchedCitations: Array<{ sourceName: string; quote: string; sectionOrPage?: string }> = [];
-  const relevantParagraphs: Array<{ sourceName: string; text: string; score: number }> = [];
+  const matchedCitations: GroundedCitation[] = [];
+  const scoredPassages: Array<{ sourceName: string; text: string; score: number }> = [];
 
-  for (const mat of materials) {
-    const rawContent = mat.content || "";
-    // Split by double newline or headers
+  for (const material of materials) {
+    const rawContent = material.content || "";
     const paragraphs = rawContent.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
 
-    for (const para of paragraphs) {
-      const paraLower = para.toLowerCase();
+    for (const paragraph of paragraphs) {
+      const paraLower = paragraph.toLowerCase();
       let matchScore = 0;
 
-      for (const word of qWords) {
+      for (const word of keywords) {
         if (paraLower.includes(word)) {
           matchScore += word.length > 4 ? 2 : 1;
         }
       }
 
       if (matchScore > 0) {
-        relevantParagraphs.push({
-          sourceName: mat.name,
-          text: para,
+        scoredPassages.push({
+          sourceName: material.name,
+          text: paragraph,
           score: matchScore,
         });
       }
     }
   }
 
-  // Sort paragraphs by relevance score
-  relevantParagraphs.sort((a, b) => b.score - a.score);
+  scoredPassages.sort((a, b) => b.score - a.score);
 
-  // Extract top citations
-  for (const item of relevantParagraphs.slice(0, 3)) {
+  for (const item of scoredPassages.slice(0, 3)) {
     const lines = item.text.split("\n");
     const headerLine = lines.find((l) => l.startsWith("#"));
-    const sectionTitle = headerLine ? headerLine.replace(/^[#\s]+/, "") : "Notes Section";
+    const sectionTitle = headerLine ? headerLine.replace(/^[#\s]+/, "") : "Core Syllabus Topic";
     const bodyLines = lines.filter((l) => !l.startsWith("#")).join(" ");
 
     const excerpt = bodyLines.length > 220 ? bodyLines.slice(0, 217) + "..." : (bodyLines || item.text);
@@ -130,7 +151,10 @@ function performSemanticGrounding(
     });
   }
 
-  return { matchedCitations, topParagraphs: relevantParagraphs.slice(0, 2) };
+  return {
+    citations: matchedCitations,
+    topPassages: scoredPassages.slice(0, 2),
+  };
 }
 
 function synthesizeGroundedAnswer(
@@ -138,43 +162,42 @@ function synthesizeGroundedAnswer(
   materials: Array<{ name: string; content: string }>,
   mode: string
 ) {
-  const { matchedCitations, topParagraphs } = performSemanticGrounding(question, materials);
+  const { citations, topPassages } = extractSemanticMatches(question, materials);
 
   let answer = "";
-  const keyTakeaways: string[] = [];
+  const keyPoints: string[] = [];
   const followUps: string[] = [];
 
-  if (topParagraphs.length > 0) {
+  if (topPassages.length > 0) {
     answer += `### Grounded Academic Synthesis\n\n`;
     answer += `Based directly on your uploaded study notes:\n\n`;
 
-    topParagraphs.forEach((p, idx) => {
-      answer += `#### ${idx + 1}. From *${p.sourceName}*\n`;
+    topPassages.forEach((p, idx) => {
+      answer += `#### ${idx + 1}. Source: *${p.sourceName}*\n`;
       answer += `${p.text}\n\n`;
     });
 
     if (mode === "deep") {
-      answer += `### Deep Intuitive Analysis\n`;
+      answer += `### Deep Intuitive Breakdown\n`;
       answer += `To master this topic conceptually, notice how the individual mechanisms interact. When applying these principles to problem sets, always evaluate the initial preconditions and constraints.\n\n`;
     } else if (mode === "exam") {
       answer += `### Exam Preparation Strategy\n`;
-      answer += `- **High-Yield Question Type:** Expect questions comparing trade-offs, definitions, and edge cases.\n`;
-      answer += `- **Key Memorization Points:** Ensure you can reproduce the core formulas and diagrams without referring to notes.\n\n`;
+      answer += `- **High-Yield Question Type:** Focus on comparing trade-offs, edge cases, and standard problem formulations.\n`;
+      answer += `- **Key Memorization Points:** Ensure you can reproduce core formulas and diagrams without referring to notes.\n\n`;
     }
 
-    keyTakeaways.push(
-      `Verified against ${topParagraphs[0].sourceName}`,
-      `Grounded in ${matchedCitations.length} cited excerpt(s)`,
-      `Ready for your study group or professor follow-up email draft`
+    keyPoints.push(
+      `Verified against ${topPassages[0].sourceName}`,
+      `Grounded in ${citations.length} cited excerpt(s)`,
+      `Ready for inclusion in study group or professor summary email`
     );
 
     followUps.push(
       `What are the most frequent exam questions on this topic?`,
-      `How does this concept connect to the other materials in your syllabus?`,
+      `How does this concept connect to the other chapters in your notes?`,
       `Would you like to generate flashcards to test this definition?`
     );
   } else {
-    // General contextual response
     answer = `### Academic Explanation\n\n`;
     answer += `Regarding **"${question}"**:\n\n`;
     answer += `1. **Fundamental Definition:** This concept is a core topic in your academic curriculum.\n`;
@@ -182,7 +205,7 @@ function synthesizeGroundedAnswer(
     answer += `3. **Practical Application:** Connect this theory to real-world applications or problem sets.\n\n`;
     answer += `*Tip: Toggle on your uploaded lecture notes in the sidebar to view exact citations and quotes.*`;
 
-    keyTakeaways.push(
+    keyPoints.push(
       "Foundational academic concept",
       "Ready to be summarized into your email draft",
       "Upload additional lecture notes for direct page quotes"
@@ -197,9 +220,9 @@ function synthesizeGroundedAnswer(
 
   return {
     answer,
-    citations: matchedCitations,
+    citations,
     suggestedFollowUps: followUps,
-    keyPoints: keyTakeaways,
+    keyPoints,
   };
 }
 
@@ -216,7 +239,6 @@ function synthesizeEmailDraft(params: {
 
   const userQuestions = chatHistory.filter((m) => m.role === "user").map((m) => m.text);
   const activeDocNames = materials.map((m) => m.name.replace(/\.[^/.]+$/, "")).slice(0, 3);
-
   const subjectTopic = activeDocNames.length > 0 ? activeDocNames.join(" & ") : "Recent Lecture Notes";
 
   let subject = "";
@@ -286,9 +308,17 @@ function synthesizeEmailDraft(params: {
   };
 }
 
+// ============================================================================
+// API ROUTES
+// ============================================================================
+
 // Health check endpoint
 app.get("/api/health", (_req, res) => {
-  res.json({ status: "ok", timestamp: Date.now() });
+  res.json({
+    status: "ok",
+    timestamp: Date.now(),
+    isGeminiConfigured: Boolean(process.env.GEMINI_API_KEY),
+  });
 });
 
 // 1. Study Chat Agent Endpoint (Grounded QA)
@@ -298,7 +328,7 @@ app.post("/api/study/chat", async (req, res) => {
   const lastMessage = validMessages[validMessages.length - 1] || { text: "Explain key concepts" };
 
   try {
-    if (!apiDisabledDueToAuth) {
+    if (!authBlocked && getGeminiClient()) {
       const materialsContext = (materials || [])
         .map((mat: { name: string; content: string }, idx: number) => {
           return `=== MATERIAL [${idx + 1}]: "${mat.name}" ===\n${mat.content || "(No text content)"}\n`;
@@ -333,7 +363,7 @@ Provide exact citations, Markdown formatting, suggested follow-ups, and key poin
         required: ["answer", "suggestedFollowUps", "keyPoints"],
       };
 
-      const result = await generateWithModelFallback({
+      const result = await executeGeminiWithFallback({
         contents: userPrompt,
         systemInstruction,
         responseSchema,
@@ -344,7 +374,7 @@ Provide exact citations, Markdown formatting, suggested follow-ups, and key poin
       }
     }
   } catch {
-    // Graceful fallback without unhandled exceptions
+    // Fall through to local semantic synthesis
   }
 
   const fallbackResult = synthesizeGroundedAnswer(lastMessage.text, materials || [], mode);
@@ -368,7 +398,7 @@ app.post("/api/study/summarize-and-email", async (req, res) => {
     : [{ role: "user", text: "Study session review" }];
 
   try {
-    if (!apiDisabledDueToAuth) {
+    if (!authBlocked && getGeminiClient()) {
       const formattedHistory = validHistory
         .map((m: { role: string; text: string }) => `[${m.role.toUpperCase()}]: ${m.text}`)
         .join("\n\n");
@@ -405,7 +435,7 @@ Analyze the study transcript and return a structured summary and email draft tai
         ],
       };
 
-      const result = await generateWithModelFallback({
+      const result = await executeGeminiWithFallback({
         contents: prompt,
         systemInstruction,
         responseSchema,
@@ -416,7 +446,7 @@ Analyze the study transcript and return a structured summary and email draft tai
       }
     }
   } catch {
-    // Graceful fallback
+    // Fall through
   }
 
   const fallback = synthesizeEmailDraft({
@@ -440,7 +470,7 @@ app.post("/api/study/refine-email", async (req, res) => {
   }
 
   try {
-    if (!apiDisabledDueToAuth) {
+    if (!authBlocked && getGeminiClient()) {
       const prompt = `Modify this email draft based on: "${refinePrompt}"\n\nSUBJECT: ${currentDraft.subject}\nBODY:\n${currentDraft.body}`;
 
       const responseSchema = {
@@ -452,7 +482,7 @@ app.post("/api/study/refine-email", async (req, res) => {
         required: ["subject", "body"],
       };
 
-      const result = await generateWithModelFallback({
+      const result = await executeGeminiWithFallback({
         contents: prompt,
         responseSchema,
       });
@@ -462,7 +492,7 @@ app.post("/api/study/refine-email", async (req, res) => {
       }
     }
   } catch {
-    // Graceful fallback
+    // Fall through
   }
 
   let refinedBody = currentDraft.body || "";
@@ -486,7 +516,7 @@ app.post("/api/study/generate-tools", async (req, res) => {
     .join("\n\n");
 
   try {
-    if (!apiDisabledDueToAuth && materialsContext.trim()) {
+    if (!authBlocked && getGeminiClient() && materialsContext.trim()) {
       if (toolType === "quiz") {
         const responseSchema = {
           type: Type.OBJECT,
@@ -510,7 +540,7 @@ app.post("/api/study/generate-tools", async (req, res) => {
           required: ["questions"],
         };
 
-        const result = await generateWithModelFallback({
+        const result = await executeGeminiWithFallback({
           contents: `Generate 4 high-yield multiple-choice questions based on:\n\n${materialsContext}`,
           responseSchema,
         });
@@ -540,7 +570,7 @@ app.post("/api/study/generate-tools", async (req, res) => {
           required: ["flashcards"],
         };
 
-        const result = await generateWithModelFallback({
+        const result = await executeGeminiWithFallback({
           contents: `Generate 6 essential study flashcards based on:\n\n${materialsContext}`,
           responseSchema,
         });
