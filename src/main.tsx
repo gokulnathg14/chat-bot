@@ -78,8 +78,14 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   }
 }
 
-const rootEl = document.getElementById('root');
-if (rootEl) {
+function initApp() {
+  let rootEl = document.getElementById('root');
+  if (!rootEl) {
+    rootEl = document.createElement('div');
+    rootEl.id = 'root';
+    document.body.appendChild(rootEl);
+  }
+
   createRoot(rootEl).render(
     <StrictMode>
       <ErrorBoundary>
@@ -89,3 +95,8 @@ if (rootEl) {
   );
 }
 
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initApp);
+} else {
+  initApp();
+}

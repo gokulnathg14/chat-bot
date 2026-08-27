@@ -659,6 +659,17 @@ async function startServer() {
       appType: "spa",
     });
     app.use(vite.middlewares);
+    app.get("*", async (req, res, next) => {
+      if (req.originalUrl.startsWith("/api/")) return next();
+      try {
+        const indexPath = path.resolve(process.cwd(), "index.html");
+        let html = fs.readFileSync(indexPath, "utf-8");
+        html = await vite.transformIndexHtml(req.originalUrl, html);
+        res.status(200).set({ "Content-Type": "text/html" }).end(html);
+      } catch (e) {
+        next(e);
+      }
+    });
   } else {
     const candidates = [
       path.join(process.cwd(), "dist"),
@@ -668,7 +679,10 @@ async function startServer() {
     const distPath = candidates.find(p => fs.existsSync(path.join(p, "index.html"))) || path.join(process.cwd(), "dist");
     
     app.use(express.static(distPath));
-    app.get("*", (_req, res) => {
+    app.get("*", (req, res) => {
+      if (req.originalUrl.startsWith("/api/")) {
+        return res.status(404).json({ error: "API endpoint not found" });
+      }
       const indexPath = path.join(distPath, "index.html");
       if (fs.existsSync(indexPath)) {
         res.sendFile(indexPath);
