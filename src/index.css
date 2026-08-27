@@ -1,9 +1,8 @@
 @import "tailwindcss";
 
-@layer base {
-  body {
-    @apply bg-slate-950 text-slate-100 antialiased selection:bg-indigo-500 selection:text-white;
-  }
+body {
+  background-color: #020617;
+  color: #f8fafc;
 }
 
 @keyframes fadeIn {
